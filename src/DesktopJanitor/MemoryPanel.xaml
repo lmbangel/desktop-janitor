@@ -1,0 +1,90 @@
+<Window x:Class="DesktopJanitor.MemoryPanel"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Desktop Janitor - memory"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        Width="452"
+        SizeToContent="Height"
+        FontFamily="Segoe UI"
+        FontSize="12.5"
+        TextOptions.TextFormattingMode="Display">
+    <Grid Margin="6">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <Grid.Effect>
+            <DropShadowEffect BlurRadius="8" ShadowDepth="2" Opacity="0.35" />
+        </Grid.Effect>
+
+        <Border Background="{StaticResource Paper}"
+                BorderBrush="{StaticResource Ink}"
+                BorderThickness="2"
+                CornerRadius="12"
+                Padding="14,8,10,12">
+            <StackPanel>
+                <DockPanel>
+                    <Button DockPanel.Dock="Right"
+                            Style="{StaticResource IconButton}"
+                            Content="&#xE711;"
+                            ToolTip="Close"
+                            Click="OnCloseClick" />
+                    <TextBlock Text="Biggest memory users"
+                               FontWeight="Bold"
+                               FontSize="14"
+                               Foreground="{StaticResource Ink}"
+                               VerticalAlignment="Center" />
+                </DockPanel>
+
+                <StackPanel Margin="0,4,4,0">
+                    <TextBlock x:Name="RamText" Foreground="{StaticResource Ink}" />
+                    <Border Height="6" Margin="0,4,0,0" CornerRadius="3" Background="{StaticResource Track}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition x:Name="RamUsed" Width="0*" />
+                                <ColumnDefinition x:Name="RamFree" Width="1*" />
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="RamUsedFill" CornerRadius="3" Background="{StaticResource Accent}" />
+                        </Grid>
+                    </Border>
+                </StackPanel>
+
+                <StackPanel x:Name="Rows" Margin="0,12,4,0" />
+
+                <TextBlock x:Name="FooterText"
+                           Margin="0,2,4,0"
+                           TextWrapping="Wrap"
+                           FontSize="11.5"
+                           Foreground="{StaticResource InkSoft}" />
+
+                <DockPanel Margin="0,8,4,0">
+                    <Button x:Name="RefreshButton"
+                            DockPanel.Dock="Right"
+                            Content="Refresh"
+                            Style="{StaticResource SecondaryButton}"
+                            Padding="9,2,9,3"
+                            Click="OnRefreshClick" />
+                    <TextBlock Text="Close works like clicking X, so apps can still ask you to save. Trim keeps them running."
+                               TextWrapping="Wrap"
+                               FontSize="11.5"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource InkSoft}" />
+                </DockPanel>
+            </StackPanel>
+        </Border>
+
+        <Path x:Name="Tail"
+              Grid.Row="1"
+              HorizontalAlignment="Left"
+              Margin="24,-2.5,0,0"
+              Data="M0,0 L9,11 L18,0"
+              Fill="{StaticResource Paper}"
+              Stroke="{StaticResource Ink}"
+              StrokeThickness="2" />
+    </Grid>
+</Window>
