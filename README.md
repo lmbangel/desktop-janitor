@@ -77,13 +77,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 The installer is per-user and **needs no admin rights**:
 
-```mermaid
-flowchart LR
-    A["Build a self-contained exe"] --> B["Close the running janitor, if any"]
-    B --> C["Copy to %LOCALAPPDATA%\Programs"]
-    C --> D["Start menu shortcut and<br/>Settings > Apps entry"]
-    D --> E["He starts his shift"]
-```
+<img src="docs/diagram-install.png" alt="Install steps: build a self-contained exe, ask a running janitor to clock off, copy it to your user Programs folder, add a Start menu shortcut and Settings entry, start his shift" width="760">
 
 Run the same command again to update: your settings are kept. Options:
 
@@ -144,22 +138,9 @@ To see a question bubble without waiting half an hour, start him with `--demo`. 
 
 ## How he decides
 
-```mermaid
-flowchart TD
-    A["Every 15 s he looks at apps with a visible window"] --> B{"Protected?<br/>Windows, security software,<br/>admin apps, installers"}
-    B -- yes --> N["Never touched"]
-    B -- no --> C{"On your deny list?"}
-    C -- yes --> N
-    C -- no --> D{"Unused for 30 min<br/>of your active time?"}
-    D -- not yet --> W["Keep watching"]
-    D -- yes --> E{"Using at least 150 MB?"}
-    E -- no --> W
-    E -- yes --> Q["Speech bubble"]
-    Q --> X["Close it"]
-    Q --> T["Trim RAM"]
-    Q --> S["Not now: snooze 1 hour"]
-    Q --> V["Never: add to deny list"]
-```
+<div align="center">
+<img src="docs/diagram-decide.png" alt="Decision flow: every 15 seconds he checks each app with a window. Protected or deny-listed apps are never touched. Apps used in the last 30 minutes, or using under 150 MB, are watched. Otherwise he asks in a speech bubble: Close it, Trim RAM, Not now or Never." width="600">
+</div>
 
 **"Unused"** means none of the app's windows has been in front for 30 minutes **while you were actually at the PC**:
 
@@ -190,17 +171,7 @@ flowchart TD
 
 **Closing is always gentle.** Here's what happens when an app has unsaved work:
 
-```mermaid
-sequenceDiagram
-    participant J as Janitor
-    participant A as App
-    participant Y as You
-    J->>A: WM_CLOSE, the same as clicking X
-    A->>Y: Save changes?
-    Y->>A: Cancel
-    Note over J: waits 8 seconds, then looks
-    J->>Y: Still open. I won't force it.
-```
+<img src="docs/diagram-close.png" alt="Comic strip: he sends WM_CLOSE like clicking X; the app asks Save changes?; you choose Cancel; 8 seconds later he sees it's still open and won't force it" width="760">
 
 **What to expect:** Windows already pages idle memory out when RAM gets tight, and it uses
 "free" RAM as file cache. Trimming makes Task Manager's numbers drop, but some of that memory
@@ -300,17 +271,6 @@ python tools/make_readme_art.py
 
 <details>
 <summary><b>How it's put together</b></summary>
-
-```mermaid
-flowchart LR
-    Tray["TrayIcon<br/>menu"] --> Cleanup
-    Janitor["JanitorWindow<br/>walks, sweeps, bubbles"] -->|click| Panel["MemoryPanel<br/>Trim / Close"]
-    Cleanup["CleanupService<br/>questions, close, trim"] --> Janitor
-    Cleanup --> Scanner["AppScanner<br/>windows + safety rules"]
-    Cleanup --> Tracker["UsageTracker<br/>unused time"]
-    Cleanup --> Policy["CleanupPolicy<br/>deny / allow lists"]
-    Panel --> Cleanup
-```
 
 ```
 src/DesktopJanitor/
