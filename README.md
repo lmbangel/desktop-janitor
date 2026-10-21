@@ -13,6 +13,10 @@ and politely tidies away the apps you've forgotten about.**
 ![His own memory: about 50 MB](https://img.shields.io/badge/his%20own%20RAM-~50%20MB-E9A93B?style=flat-square)
 [![MIT License](https://img.shields.io/badge/license-MIT-346BD6?style=flat-square)](LICENSE)
 
+<a href="https://github.com/lmbangel/desktop-janitor/releases/latest/download/DesktopJanitor.exe"><img src="https://img.shields.io/github/v/release/lmbangel/desktop-janitor?label=Download%20for%20Windows&style=for-the-badge&color=2E9684" alt="Download Desktop Janitor for Windows" height="38"></a>
+
+<sub>One file. Double-click it and click <b>Install</b>. No admin rights, no .NET needed.</sub>
+
 [Features](#features) · [Install](#install) · [Using him](#using-him) · [How he decides](#how-he-decides) · [Safety](#safety-first) · [Configuration](#configuration) · [FAQ](#faq)
 
 </div>
@@ -66,8 +70,26 @@ up with crisp pixels at any display scaling. You can [swap in your own sprite sh
 
 ## Install
 
-> **You need** 64-bit Windows 10 or 11 and the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
-> The SDK is only needed to build. The installed app carries its own runtime.
+### The easy way (no technical knowledge needed)
+
+<img src="docs/screenshot-setup.png" alt="The setup window: Hi! I'm the Desktop Janitor. Shall I move in? With options to start with Windows and add a desktop shortcut, and buttons Just try him and Install" width="620">
+
+1. **[Download DesktopJanitor.exe](https://github.com/lmbangel/desktop-janitor/releases/latest/download/DesktopJanitor.exe).** It works on 64-bit Windows 10 or 11.
+2. **Double-click it.** If Windows says *"Windows protected your PC"*, click **More info**, then **Run anyway**. This appears because the app isn't code-signed; see [the FAQ](#faq).
+3. **Click Install.** You can also have him start with Windows, or put a shortcut on the desktop.
+4. **That's it.** He appears just above your taskbar. Next time, find him in the Start menu as **Desktop Janitor**.
+
+A few more things you can do with the same file:
+
+- **Try him without installing:** click **Just try him** instead of Install.
+- **Update:** download a newer `DesktopJanitor.exe` and double-click it. It offers **Update** and keeps your settings.
+- **Uninstall:** go to **Settings → Apps → Installed apps → Desktop Janitor → Uninstall**.
+
+It installs for your user only, in `%LOCALAPPDATA%\Programs\DesktopJanitor`, with **no admin rights needed**.
+
+### From source (for developers)
+
+> **You need** the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) to build. The installed app carries its own runtime.
 
 ```powershell
 git clone https://github.com/lmbangel/desktop-janitor.git
@@ -75,7 +97,7 @@ cd desktop-janitor
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-The installer is per-user and **needs no admin rights**:
+`install.ps1` builds the exe, then installs it exactly as the setup window does:
 
 <img src="docs/diagram-install.png" alt="Install steps: build a self-contained exe, ask a running janitor to clock off, copy it to your user Programs folder, add a Start menu shortcut and Settings entry, start his shift" width="760">
 
@@ -88,8 +110,9 @@ Run the same command again to update: your settings are kept. Options:
 | `-SkipBuild` | Install the exe already in `publish\` without rebuilding |
 | `-NoLaunch` | Don't start him afterwards |
 
-**To uninstall,** go to **Settings → Apps → Installed apps → Desktop Janitor**, or run `uninstall.ps1`.
-That removes the program, its shortcuts and its start-up entry. Add `-RemoveSettings` to delete your settings and log too.
+**To uninstall,** use Settings → Apps, as above, or run `uninstall.ps1`. Either way the program, its
+shortcuts and its start-up entry are removed, and your settings and log are kept. To delete those too,
+tick the box in the uninstall window, or pass `-RemoveSettings` to the script.
 
 ## Using him
 
@@ -227,7 +250,9 @@ App names are process names without `.exe`, as shown in brackets in the report (
 | `--memory-list` | Opens the memory list right after starting |
 | `--report` | Writes the report and exits |
 | `--config <file>` | Uses a different config file |
-| `--exit` | Asks a running janitor to quit (the installer uses this) |
+| `--exit` | Asks a running janitor to quit (the installers use this) |
+| `--uninstall` | Opens the uninstall window (what Settings → Apps runs) |
+| `--no-setup` | Runs a downloaded exe straight away, without offering to install it |
 | `--snapshots <dir>` | Renders the README's bubble and memory list with sample data |
 
 </details>
@@ -284,6 +309,8 @@ src/DesktopJanitor/
   CleanupPolicy.cs     deny and allow lists
   JanitorConfig.cs     settings and defaults
   TrayIcon.cs          tray menu
+  Installer.cs         the self-install / update / uninstall logic
+  SetupWindow.*        the setup and uninstall window
   Snapshots.cs         README renders
   Native.cs            Win32 calls
 tools/                 sprite and README art generators
@@ -294,6 +321,18 @@ uninstall.ps1          removes it again
 </details>
 
 ## FAQ
+
+<details>
+<summary><b>Why does Windows say "Windows protected your PC"?</b></summary>
+
+Windows SmartScreen warns about any downloaded app that isn't code-signed and that it hasn't seen
+much yet. Signing needs a paid certificate, which this hobby project doesn't have. Click
+**More info → Run anyway**. It only asks the first time.
+
+Everything the exe does is in this repository, and you can build it yourself with
+[`install.ps1`](#from-source-for-developers). If **Smart App Control** is switched on in Windows Security,
+Windows won't run unsigned apps at all, so building from source is the way to go there.
+</details>
 
 <details>
 <summary><b>Will he close something I'm working on?</b></summary>

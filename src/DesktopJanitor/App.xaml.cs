@@ -11,13 +11,13 @@ namespace DesktopJanitor;
 ///   --report         write what's open and how the janitor would treat it to report.txt, then exit
 ///   --demo           show a sample question a few seconds after start (nothing is touched)
 ///   --memory-list    open the memory list a moment after start
-///   --exit           ask a running janitor to quit (used by the installer), then exit
-///   --snapshots &lt;dir&gt; render the bubble and memory list with sample data to PNGs (for the README), then exit
+///   --exit           ask a running janitor to quit (used by the installers), then exit
+///   --uninstall      remove the installed janitor (what Settings > Apps runs)
+///   --no-setup       run a downloaded exe straight away, without offering to install it
+///   --snapshots &lt;dir&gt; render the UI with sample data to PNGs (for the README), then exit
 /// </summary>
 public partial class App : Application
 {
-    private const string ExitSignalName = @"Local\DesktopJanitor.Exit";
-
     private Mutex? _singleInstance;
     private EventWaitHandle? _exitSignal;
     private RegisteredWaitHandle? _exitWait;
@@ -37,7 +37,7 @@ public partial class App : Application
         };
 
         string? configPath = null, snapshotDir = null;
-        bool report = false, demo = false, memoryList = false, exit = false;
+        bool report = false, demo = false, memoryList = false, exit = false, uninstall = false, noSetup = false;
         for (int i = 0; i < e.Args.Length; i++)
         {
             switch (e.Args[i].ToLowerInvariant())
@@ -57,10 +57,26 @@ public partial class App : Application
                 case "--exit":
                     exit = true;
                     break;
+                case "--uninstall":
+                    uninstall = true;
+                    break;
+                case "--no-setup":
+                    noSetup = true;
+                    break;
                 case "--snapshots" when i + 1 < e.Args.Length:
                     snapshotDir = Path.GetFullPath(e.Args[++i]);
                     break;
             }
+        }
+
+        if (exit)
+        {
+            if (EventWaitHandle.TryOpenExisting(Installer.ExitSignalName, out EventWaitHandle? signal))
+            {
+                using (signal) signal.Set();
+            }
+            Shutdown();
+            return;
         }
 
         if (snapshotDir is not null)
@@ -70,24 +86,36 @@ public partial class App : Application
             return;
         }
 
-        if (exit)
+        if (uninstall)
         {
-            if (EventWaitHandle.TryOpenExisting(ExitSignalName, out EventWaitHandle? signal))
-            {
-                using (signal) signal.Set();
-            }
-            Shutdown();
+            new SetupWindow(SetupMode.Uninstall).Show();
             return;
         }
 
-        ConfigStore.Load(configPath);
-
         if (report)
         {
+            ConfigStore.Load(configPath);
             Report.Write(Report.Build(AppScanner.Scan(), _ => null, null, ConfigStore.Current), open: false);
             Shutdown();
             return;
         }
+
+        // A downloaded exe (single-file, not yet in the install folder) offers to install itself.
+        // Dev builds (dotnet run, bin\) and the installed copy go straight to work.
+        if (!noSetup && Installer.IsSingleFileBuild && !Installer.IsRunningInstalledCopy)
+        {
+            var setup = new SetupWindow(Installer.InstalledVersion is null ? SetupMode.Install : SetupMode.Update);
+            setup.RunWithoutInstalling += () => StartJanitor(configPath, demo, memoryList);
+            setup.Show();
+            return;
+        }
+
+        StartJanitor(configPath, demo, memoryList);
+    }
+
+    private void StartJanitor(string? configPath, bool demo, bool memoryList)
+    {
+        ConfigStore.Load(configPath);
 
         _singleInstance = new Mutex(true, @"Local\DesktopJanitor", out bool firstInstance);
         if (!firstInstance)
@@ -98,8 +126,8 @@ public partial class App : Application
             return;
         }
 
-        // Lets `DesktopJanitor.exe --exit` (the installer) close us cleanly, tray icon and all.
-        _exitSignal = new EventWaitHandle(false, EventResetMode.AutoReset, ExitSignalName);
+        // Lets `DesktopJanitor.exe --exit` (the installers) close us cleanly, tray icon and all.
+        _exitSignal = new EventWaitHandle(false, EventResetMode.AutoReset, Installer.ExitSignalName);
         _exitWait = ThreadPool.RegisterWaitForSingleObject(
             _exitSignal, (_, _) => Dispatcher.InvokeAsync(() => Shutdown()), null, Timeout.Infinite, executeOnlyOnce: true);
 
@@ -113,7 +141,7 @@ public partial class App : Application
         _janitor = janitor;
         _cleanup = cleanup;
         _tray = new TrayIcon(janitor, cleanup, ToggleMemoryList, () => Shutdown());
-        Log.Info($"Started: mode {ConfigStore.Current.Mode}, config {ConfigStore.FilePath}");
+        Log.Info($"Started {Installer.ThisVersion}: mode {ConfigStore.Current.Mode}, config {ConfigStore.FilePath}");
 
         if (demo) _ = DemoAsync(janitor);
         if (memoryList) _ = Task.Delay(TimeSpan.FromSeconds(2)).ContinueWith(_ => ToggleMemoryList(), TaskScheduler.FromCurrentSynchronizationContext());
@@ -132,6 +160,7 @@ public partial class App : Application
             _singleInstance.Dispose();
             Log.Info("Stopped");
         }
+        if (Installer.RemoveFolderOnExit) Installer.StartFolderRemoval();
         base.OnExit(e);
     }
 

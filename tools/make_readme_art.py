@@ -180,6 +180,17 @@ def screenshot(sheet, ui_name, out_name, width, sprite_x):
     img.convert("RGB").save(DOCS / out_name, optimize=True)
 
 
+def screenshot_setup():
+    """The setup window, centred on a drawn desktop like a freshly opened download."""
+    s = 2
+    ui = Image.open(UI / "setup.png").convert("RGBA")
+    width, height = ui.width + 160 * s, ui.height + 48 * s + 60 * s
+    img, ground = desktop(width, height, s)
+    img = img.convert("RGBA")
+    img.alpha_composite(ui, ((width - ui.width) // 2, (ground - ui.height) // 2))
+    img.convert("RGB").save(DOCS / "screenshot-setup.png", optimize=True)
+
+
 # --- Comic-style diagrams (drawn at 2x) -------------------------------------------------------
 
 def wrap(draw, text, fnt, width):
@@ -414,10 +425,11 @@ def main():
     animations_gif(sheet)
     screenshot(sheet, "bubble-question.png", "screenshot-question.png", width=1100, sprite_x=180)
     screenshot(sheet, "memory-panel.png", "screenshot-memory.png", width=1100, sprite_x=180)
+    screenshot_setup()
     diagram_install(sheet)
     diagram_decide()
     diagram_close(sheet)
-    for name in ("hero.gif", "animations.gif", "screenshot-question.png", "screenshot-memory.png",
+    for name in ("hero.gif", "animations.gif", "screenshot-question.png", "screenshot-memory.png", "screenshot-setup.png",
                  "diagram-install.png", "diagram-decide.png", "diagram-close.png"):
         path = DOCS / name
         print(f"{name:26} {path.stat().st_size // 1024:5} KB")

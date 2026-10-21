@@ -43,6 +43,8 @@ public static class Snapshots
                 ramUsed: 12_900 * MB,
                 ramTotal: 16_100 * MB),
             Path.Combine(dir, "memory-panel.png"));
+
+        Save(SetupWindow.CreateSample(), Path.Combine(dir, "setup.png"));
     }
 
     private static void Save(Window window, string path)

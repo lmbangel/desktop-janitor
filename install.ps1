@@ -126,7 +126,7 @@ $entry = @{
     Publisher       = 'Desktop Janitor'
     DisplayIcon     = $target
     InstallLocation = $installDir
-    UninstallString = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$installDir\uninstall.ps1`""
+    UninstallString = "`"$target`" --uninstall"
 }
 foreach ($name in $entry.Keys) { Set-ItemProperty -Path $uninstallKey -Name $name -Value $entry[$name] }
 Set-ItemProperty -Path $uninstallKey -Name NoModify -Value 1 -Type DWord
