@@ -22,16 +22,18 @@ public sealed class AppUsage
 /// </summary>
 public sealed class UsageTracker
 {
-    private readonly Dictionary<string, AppUsage> _apps = new();
-    private readonly Dictionary<uint, string?> _processNames = new();
+    // Keyed by AppInfo.Key (the program's exe path), so two programs that share a process name stay apart.
+    private readonly Dictionary<string, AppUsage> _apps = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<uint, string?> _processKeys = new();
 
+    /// <summary>Key of the app in front right now (see AppInfo.Key), if any.</summary>
     public string? ForegroundApp { get; private set; }
 
     public void Tick(double seconds, bool userPresent)
     {
         // A minimised window can stay "foreground" if nothing else took focus; nobody is using it.
         IntPtr foreground = Native.GetForegroundWindow();
-        ForegroundApp = Native.IsIconic(foreground) ? null : AppNameOf(foreground);
+        ForegroundApp = Native.IsIconic(foreground) ? null : KeyOf(foreground);
         if (ForegroundApp is not null && _apps.TryGetValue(ForegroundApp, out AppUsage? active))
         {
             active.IdleSeconds = 0;
@@ -40,41 +42,31 @@ public sealed class UsageTracker
         }
 
         if (!userPresent) return;
-        foreach ((string name, AppUsage usage) in _apps)
+        foreach ((string key, AppUsage usage) in _apps)
         {
-            if (name != ForegroundApp) usage.IdleSeconds += seconds;
+            if (!string.Equals(key, ForegroundApp, StringComparison.OrdinalIgnoreCase)) usage.IdleSeconds += seconds;
         }
     }
 
     /// <summary>Starts tracking newly seen apps at zero and forgets closed ones.</summary>
-    public void Sync(IEnumerable<string> appNames)
+    public void Sync(IEnumerable<string> appKeys)
     {
-        var current = appNames.ToHashSet();
+        var current = appKeys.ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (string gone in _apps.Keys.Where(k => !current.Contains(k)).ToList())
             _apps.Remove(gone);
-        foreach (string name in current)
-            _apps.TryAdd(name, new AppUsage());
-        _processNames.Clear(); // PIDs get reused; don't trust old entries for long
+        foreach (string key in current)
+            _apps.TryAdd(key, new AppUsage());
+        _processKeys.Clear(); // PIDs get reused; don't trust old entries for long
     }
 
-    public AppUsage? Get(string appName) => _apps.TryGetValue(appName, out AppUsage? usage) ? usage : null;
+    public AppUsage? Get(string appKey) => _apps.TryGetValue(appKey, out AppUsage? usage) ? usage : null;
 
-    private string? AppNameOf(IntPtr hwnd)
+    private string? KeyOf(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero) return null;
         Native.GetWindowThreadProcessId(hwnd, out uint pid);
-        if (_processNames.TryGetValue(pid, out string? cached)) return cached;
-
-        string? name = null;
-        try
-        {
-            using Process p = Process.GetProcessById((int)pid);
-            name = AppNames.Normalize(p.ProcessName);
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
-        {
-        }
-        _processNames[pid] = name;
-        return name;
+        if (!_processKeys.TryGetValue(pid, out string? key))
+            _processKeys[pid] = key = AppScanner.KeyFor(pid);
+        return key;
     }
 }

@@ -44,12 +44,19 @@ public partial class MemoryPanel : Window
 
     /// <summary>A panel filled with made-up rows for README screenshots (`--snapshots`). Its buttons do nothing.</summary>
     public static MemoryPanel CreateSample(
-        IReadOnlyList<(string Name, string? ExePath, long Bytes, string Status)> rows, string footer, long ramUsed, long ramTotal)
+        IReadOnlyList<(string Name, string? ExePath, long Bytes, string Status, bool CanTrim, bool CanClose)> rows,
+        string footer, long ramUsed, long ramTotal)
     {
         var panel = new MemoryPanel();
         long largest = Math.Max(1, rows.Max(r => r.Bytes));
         foreach (var r in rows)
-            panel.Rows.Children.Add(panel.BuildRowCore(IconFor(r.ExePath), r.Name, r.Bytes, r.Bytes / (double)largest, r.Status).Row);
+        {
+            (Grid row, Button trim, Button close, _) =
+                panel.BuildRowCore(IconFor(r.ExePath), r.Name, r.Bytes, r.Bytes / (double)largest, r.Status);
+            trim.IsEnabled = r.CanTrim;
+            close.IsEnabled = r.CanClose;
+            panel.Rows.Children.Add(row);
+        }
         panel.FooterText.Text = footer;
         panel.ShowRam(ramUsed, ramTotal);
         return panel;
@@ -108,25 +115,17 @@ public partial class MemoryPanel : Window
         Rows.Children.Add(Note("Looking around..."));
         UpdateRam();
 
+        // The true top users, like Task Manager sorted by Memory: protected and background ones included.
         IReadOnlyList<AppInfo> apps = await _cleanup.RefreshAppsAsync();
-        JanitorConfig config = ConfigStore.Current;
-        var offered = apps.Where(a => CleanupPolicy.MayActOnManually(a, config)).Take(Math.Max(1, config.MemoryListSize)).ToList();
-        var notOffered = apps.Where(a => !CleanupPolicy.MayActOnManually(a, config)).ToList();
+        var shown = apps.Take(Math.Max(1, ConfigStore.Current.MemoryListSize)).ToList();
 
         Rows.Children.Clear();
-        if (offered.Count == 0)
-            Rows.Children.Add(Note("Nothing to tidy: every open app is protected or on your deny list."));
-        long largest = offered.Count > 0 ? Math.Max(1, offered[0].MemoryBytes) : 1;
-        foreach (AppInfo app in offered)
+        long largest = shown.Count > 0 ? Math.Max(1, shown[0].MemoryBytes) : 1;
+        foreach (AppInfo app in shown)
             Rows.Children.Add(BuildRow(app, largest));
 
-        FooterText.Text = notOffered.Count switch
-        {
-            0 => string.Empty,
-            1 => $"Not listed: {notOffered[0].DisplayName} ({Bytes.Format(notOffered[0].MemoryBytes)}), protected or on your deny list.",
-            _ => $"Not listed: {notOffered[0].DisplayName} ({Bytes.Format(notOffered[0].MemoryBytes)}) and {notOffered.Count - 1} more, protected or on your deny list.",
-        };
-        FooterText.Visibility = notOffered.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        FooterText.Text = $"Top {shown.Count} of {apps.Count} programs by memory, measured like Task Manager's Memory column.";
+        FooterText.Visibility = Visibility.Visible;
 
         UpdateRam();
         RefreshButton.IsEnabled = _pending == 0;
@@ -134,16 +133,42 @@ public partial class MemoryPanel : Window
 
     private UIElement BuildRow(AppInfo app, long largest)
     {
-        (Grid row, Button trim, Button close, TextBlock status) =
-            BuildRowCore(IconFor(app.ExePath), app.DisplayName, app.MemoryBytes, app.MemoryBytes / (double)largest, Describe(app));
+        bool isProtected = !CleanupPolicy.MayActOnManually(app);
+        bool denied = CleanupPolicy.IsDenied(app, ConfigStore.Current);
+        bool canClose = !isProtected && app.HasWindows;
 
-        trim.Click += async (_, _) => await RunAsync(trim, close, status, "Trimming...", async () =>
+        (Grid row, Button trim, Button close, TextBlock status) = BuildRowCore(
+            IconFor(app.ExePath), app.DisplayName, app.MemoryBytes, app.MemoryBytes / (double)largest, Describe(app, isProtected, denied));
+        trim.IsEnabled = !isProtected;
+        close.IsEnabled = canClose;
+
+        if (isProtected)
+        {
+            trim.ToolTip = close.ToolTip = $"Protected ({app.ProtectedReason}): the janitor never touches it.";
+            return row;
+        }
+        if (!app.HasWindows) close.ToolTip = "It runs in the background with no window to close. Trim still works.";
+
+        trim.Click += async (_, _) => await RunAsync(trim, close, canClose, status, "Trimming...", async () =>
         {
             long freed = await _cleanup.TrimFromListAsync(app);
             return ($"Trimmed {Bytes.Format(freed)}. It keeps running.", false);
         });
-        close.Click += async (_, _) => await RunAsync(trim, close, status, "Closing... it may ask you to save.", async () =>
-            Describe(await _cleanup.CloseFromListAsync(app), app));
+
+        // Deny-listed apps (editors, terminals, calls...) close only after a second, deliberate click.
+        bool confirmed = !denied;
+        close.Click += async (_, _) =>
+        {
+            if (!confirmed)
+            {
+                confirmed = true;
+                close.Content = "Close anyway";
+                status.Text = "It's on your deny list. Click again to close it anyway; it can still ask you to save.";
+                return;
+            }
+            await RunAsync(trim, close, canClose, status, "Closing... it may ask you to save.", async () =>
+                Describe(await _cleanup.CloseFromListAsync(app), app));
+        };
         return row;
     }
 
@@ -210,7 +235,8 @@ public partial class MemoryPanel : Window
     }
 
     /// <summary>Runs one row's action; the panel stays open until it finishes.</summary>
-    private async Task RunAsync(Button trim, Button close, TextBlock status, string working, Func<Task<(string Message, bool Gone)>> action)
+    private async Task RunAsync(Button trim, Button close, bool canClose, TextBlock status, string working,
+        Func<Task<(string Message, bool Gone)>> action)
     {
         trim.IsEnabled = close.IsEnabled = false;
         RefreshButton.IsEnabled = false;
@@ -220,7 +246,8 @@ public partial class MemoryPanel : Window
         {
             (string message, bool gone) = await action();
             status.Text = message;
-            trim.IsEnabled = close.IsEnabled = !gone;
+            trim.IsEnabled = !gone;
+            close.IsEnabled = !gone && canClose;
         }
         finally
         {
@@ -230,15 +257,30 @@ public partial class MemoryPanel : Window
         }
     }
 
-    private string Describe(AppInfo app)
+    private string Describe(AppInfo app, bool isProtected, bool denied)
     {
-        string windows = app.Windows.Count == 1 ? "1 window" : $"{app.Windows.Count} windows";
-        AppUsage? usage = _cleanup.UsageOf(app);
-        if (usage is null) return windows;
+        if (isProtected) return $"Protected: {app.ProtectedReason}";
+
+        var parts = new List<string>();
+        if (app.HasWindows)
+        {
+            parts.Add(app.Windows.Count == 1 ? "1 window" : $"{app.Windows.Count} windows");
+            if (UsedText(_cleanup.UsageOf(app)) is { } used) parts.Add(used);
+        }
+        else
+        {
+            parts.Add(app.ProcessCount == 1 ? "Background process" : $"Background, {app.ProcessCount} processes");
+        }
+        if (denied) parts.Add("deny-listed");
+        return string.Join(", ", parts);
+    }
+
+    private static string? UsedText(AppUsage? usage)
+    {
+        if (usage is null) return null;
         // Before he's seen it in front, idle time is only a lower bound ("12+ min").
-        if (!usage.SeenInFront)
-            return usage.IdleSeconds < 60 ? windows : $"{windows}, unused {usage.IdleMinutes:0}+ min";
-        return usage.IdleSeconds < 60 ? $"{windows}, used just now" : $"{windows}, unused {usage.IdleMinutes:0} min";
+        if (!usage.SeenInFront) return usage.IdleSeconds < 60 ? null : $"unused {usage.IdleMinutes:0}+ min";
+        return usage.IdleSeconds < 60 ? "used just now" : $"unused {usage.IdleMinutes:0} min";
     }
 
     private static (string Message, bool Gone) Describe(CloseResult result, AppInfo app) => result.Outcome switch
@@ -246,7 +288,7 @@ public partial class MemoryPanel : Window
         CloseOutcome.Closed => ($"Closed. About {Bytes.Format(app.MemoryBytes)} freed.", true),
         CloseOutcome.StillOpen => ("Still open. It may be asking you to save.", false),
         CloseOutcome.InBackground => ($"Window closed, still running in the tray ({Bytes.Format(result.LeftoverBytes)}).", true),
-        CloseOutcome.NotAllowed => ("Not allowed: protected or on your deny list.", true),
+        CloseOutcome.NotAllowed => ("Not allowed: it's protected.", true),
         _ => ("Couldn't reach its window. Try Refresh.", false),
     };
 

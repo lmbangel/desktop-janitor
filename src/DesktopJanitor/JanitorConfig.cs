@@ -78,7 +78,7 @@ public sealed class JanitorConfig
     public bool Clickable { get; set; } = true;
 
     /// <summary>How many apps the memory list shows (biggest first).</summary>
-    public int MemoryListSize { get; set; } = 4;
+    public int MemoryListSize { get; set; } = 6;
 
     public double WalkSpeed { get; set; } = 40;
     public double Scale { get; set; } = 3;

@@ -8,7 +8,7 @@
         Topmost="True"
         ShowInTaskbar="False"
         ResizeMode="NoResize"
-        Width="452"
+        Width="500"
         SizeToContent="Height"
         FontFamily="Segoe UI"
         FontSize="12.5"

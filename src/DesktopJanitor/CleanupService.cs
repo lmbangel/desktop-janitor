@@ -87,7 +87,7 @@ public sealed class CleanupService
     public async Task ShowReportAsync()
     {
         await ScanAsync();
-        string text = Report.Build(_apps, a => _tracker.Get(a.Name), _tracker.ForegroundApp, Config);
+        string text = Report.Build(_apps, a => _tracker.Get(a.Key), _tracker.ForegroundApp, Config);
         Report.Write(text, open: true);
     }
 
@@ -99,20 +99,20 @@ public sealed class CleanupService
         return _apps;
     }
 
-    public AppUsage? UsageOf(AppInfo app) => _tracker.Get(app.Name);
+    public AppUsage? UsageOf(AppInfo app) => _tracker.Get(app.Key);
 
     /// <summary>Your click on Close: the same graceful close; protections and the deny list still apply.</summary>
     public async Task<CloseResult> CloseFromListAsync(AppInfo app)
     {
-        if (!CleanupPolicy.MayActOnManually(app, Config)) return new CloseResult(CloseOutcome.NotAllowed, 0);
+        if (!CleanupPolicy.MayActOnManually(app)) return new CloseResult(CloseOutcome.NotAllowed, 0);
         // Don't follow your own click with a question about the same app.
-        if (_tracker.Get(app.Name) is { } usage) usage.SnoozedUntil = DateTime.UtcNow.AddMinutes(Config.SnoozeMinutes);
+        if (_tracker.Get(app.Key) is { } usage) usage.SnoozedUntil = DateTime.UtcNow.AddMinutes(Config.SnoozeMinutes);
         return await CloseGracefullyAsync(app, "Closing (from the memory list)");
     }
 
     public async Task<long> TrimFromListAsync(AppInfo app)
     {
-        if (!CleanupPolicy.MayActOnManually(app, Config)) return 0;
+        if (!CleanupPolicy.MayActOnManually(app)) return 0;
         return await TrimAsync(new[] { app });
     }
 
@@ -132,7 +132,7 @@ public sealed class CleanupService
         try
         {
             _apps = await Task.Run(AppScanner.Scan);
-            _tracker.Sync(_apps.Select(a => a.Name));
+            _tracker.Sync(_apps.Where(a => a.HasWindows).Select(a => a.Key));
         }
         catch (Exception ex)
         {
@@ -149,7 +149,7 @@ public sealed class CleanupService
         var result = new List<Candidate>();
         foreach (AppInfo app in _apps) // already sorted biggest first
         {
-            AppUsage? usage = _tracker.Get(app.Name);
+            AppUsage? usage = _tracker.Get(app.Key);
             if (usage is not null && CleanupPolicy.WhyNot(app, usage, _tracker.ForegroundApp, config) is null)
                 result.Add(new Candidate(app, usage));
         }
@@ -228,7 +228,7 @@ public sealed class CleanupService
         Log.Info($"Answer for {c.App.Name}: {choice}");
 
         // You might have switched to it while the bubble was up.
-        if ((choice is PromptChoice.Close or PromptChoice.Trim) && _tracker.Get(c.App.Name)?.IdleSeconds < config.IdleMinutes * 60)
+        if ((choice is PromptChoice.Close or PromptChoice.Trim) && _tracker.Get(c.App.Key)?.IdleSeconds < config.IdleMinutes * 60)
         {
             _janitor.Say($"You're using {name} again", "So I'll leave it be.");
             return;
@@ -303,7 +303,7 @@ public sealed class CleanupService
         await Task.Delay(CloseGracePeriod);
 
         bool windowsLeft = app.Windows.Any(w => IsStillSameWindow(w) && Native.IsWindowVisible(w.Handle));
-        long leftover = await Task.Run(() => RunningMemory(app.Name));
+        long leftover = await Task.Run(() => RunningMemory(app));
         Log.Info($"After closing {app.Name}: windows left={windowsLeft}, still running={Bytes.Format(leftover)}");
 
         if (windowsLeft) return new CloseResult(CloseOutcome.StillOpen, leftover);
@@ -317,24 +317,26 @@ public sealed class CleanupService
         return pid == w.ProcessId; // handles get reused
     }
 
-    private static long RunningMemory(string appName)
+    /// <summary>Private working set of the app's processes that are still running.</summary>
+    private static long RunningMemory(AppInfo app)
     {
-        int session = Process.GetCurrentProcess().SessionId;
-        long total = 0;
-        foreach (Process p in Process.GetProcessesByName(appName))
+        Dictionary<uint, long> now = AppScanner.MemoryByPid();
+        return app.ProcessIds.Where(pid => IsSameProgram(pid, app)).Sum(pid => now.GetValueOrDefault(pid));
+    }
+
+    /// <summary>PIDs get reused: only treat a PID as the app's if it still runs the same exe.</summary>
+    private static bool IsSameProgram(uint pid, AppInfo app)
+    {
+        IntPtr h = Native.OpenProcess(Native.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (h == IntPtr.Zero) return false;
+        try
         {
-            using (p)
-            {
-                try
-                {
-                    if (p.SessionId == session) total += p.WorkingSet64;
-                }
-                catch (InvalidOperationException)
-                {
-                }
-            }
+            return app.ExePath is null || string.Equals(Native.GetProcessPath(h), app.ExePath, StringComparison.OrdinalIgnoreCase);
         }
-        return total;
+        finally
+        {
+            Native.CloseHandle(h);
+        }
     }
 
     /// <summary>EmptyWorkingSet on each of the apps' processes. Harmless: nothing closes, pages come back on demand.</summary>
@@ -342,35 +344,24 @@ public sealed class CleanupService
     {
         long total = await Task.Run(() =>
         {
-            int session = Process.GetCurrentProcess().SessionId;
             long freed = 0;
             foreach (AppInfo app in apps)
             {
                 long appFreed = 0;
-                foreach (Process p in Process.GetProcessesByName(app.Name))
+                foreach (uint pid in app.ProcessIds)
                 {
-                    using (p)
+                    IntPtr h = Native.OpenProcess(Native.PROCESS_QUERY_LIMITED_INFORMATION | Native.PROCESS_SET_QUOTA, false, pid);
+                    if (h == IntPtr.Zero) continue; // e.g. sandboxed browser helpers: skipping them is fine
+                    try
                     {
-                        try
-                        {
-                            if (p.SessionId != session) continue;
-                        }
-                        catch (InvalidOperationException)
-                        {
-                            continue;
-                        }
-
-                        IntPtr h = Native.OpenProcess(Native.PROCESS_QUERY_LIMITED_INFORMATION | Native.PROCESS_SET_QUOTA, false, (uint)p.Id);
-                        if (h == IntPtr.Zero) continue;
-                        try
-                        {
-                            long before = Native.GetWorkingSet(h);
-                            if (Native.EmptyWorkingSet(h)) appFreed += Math.Max(0, before - Native.GetWorkingSet(h));
-                        }
-                        finally
-                        {
-                            Native.CloseHandle(h);
-                        }
+                        if (app.ExePath is not null && !string.Equals(Native.GetProcessPath(h), app.ExePath, StringComparison.OrdinalIgnoreCase))
+                            continue; // the PID now belongs to something else
+                        long before = Native.GetWorkingSet(h);
+                        if (Native.EmptyWorkingSet(h)) appFreed += Math.Max(0, before - Native.GetWorkingSet(h));
+                    }
+                    finally
+                    {
+                        Native.CloseHandle(h);
                     }
                 }
                 Log.Info($"Trimmed {app.Name}: {Bytes.Format(appFreed)}");
@@ -381,7 +372,7 @@ public sealed class CleanupService
 
         foreach (AppInfo app in apps)
         {
-            if (_tracker.Get(app.Name) is { } usage) usage.Trimmed = true;
+            if (_tracker.Get(app.Key) is { } usage) usage.Trimmed = true;
         }
         return total;
     }

@@ -121,13 +121,22 @@ tick the box in the uninstall window, or pass `-RemoveSettings` to the script.
 Hover over him and he stops walking. Click, and **Biggest memory users** opens above his head:
 
 - **RAM in use:** a bar that turns red above 85%.
-- **The biggest apps:** the top 4 by default, each with its icon, memory, window count and how long it's been unused. Memory adds up all of an app's processes, so a browser shows its real total.
-- **Trim:** moves the app's idle memory out of RAM. It keeps running and nothing can be lost.
+- **The biggest programs, like Task Manager sorted by Memory:** the top 6 by default, background processes included. The figure is the same one in Task Manager's **Memory** column (private working set), added up over all of a program's processes, so a browser shows its real total.
+  - Programs are grouped by their exe file, so Claude and Claude Code, for example, appear separately. Task Manager instead folds child processes into whichever app started them.
+- **Trim:** moves the program's idle memory out of RAM. It keeps running and nothing can be lost.
 - **Close:** a gentle close. The row then shows what happened:
   - *"Closed. About 1.2 GB freed."*
   - *"Still open. It may be asking you to save."*
   - *"Window closed, still running in the tray."*
-- **Not listed:** protected and deny-listed apps are never offered. The footer names the biggest one left out, so nothing is hidden from you.
+
+What each row lets you do:
+
+| Row says | Trim | Close |
+|---|---|---|
+| *7 windows, unused 42 min* | ✅ | ✅ |
+| *deny-listed* | ✅ | ✅ after a second click (**Close anyway**) |
+| *Background, 9 processes* | ✅ | no window to close |
+| *Protected: Windows system process* | never | never |
 
 The list closes when you click elsewhere, click **✕**, or click him again.
 
@@ -138,7 +147,7 @@ The list closes when you click elsewhere, click **✕**, or click him again.
 | **Close it** | He re-checks you haven't gone back to the app, then closes it like clicking **X**. 8 s later he tells you whether it closed, is asking you to save, or is hiding in the tray. |
 | **Trim RAM** | The app keeps running. Windows moves its idle memory out of RAM, and it comes back when the app needs it. |
 | **Not now** | He leaves that app alone for an hour. Ignoring the bubble for a minute does the same. |
-| **Never** | He adds the app to your deny list. He'll never suggest, close or trim it again. |
+| **Never** | He adds the app to your deny list. He'll never suggest, auto-close or auto-trim it again. In the memory list you can still trim it, or close it with a second click. |
 
 He asks about one app at a time, biggest first, and waits at least 5 minutes between questions.
 
@@ -181,7 +190,9 @@ To see a question bubble without waiting half an hour, start him with `--demo`. 
 | 🛡️ Security software | AVG, Avast, Bitdefender, ESET, Kaspersky, Malwarebytes, McAfee, Norton, Sophos, Trend Micro and Defender |
 | 🔐 Privileged or foreign | Apps running as administrator, apps in another Windows session, and anything he can't inspect |
 | 📦 Installers and updaters | So an install is never interrupted |
-| 👻 Background processes | Anything without a visible window, such as services |
+
+**Background processes** (no window) are never suggested or closed, because there's no window to close gently.
+You can still trim them from the memory list.
 
 **The deny list** comes pre-filled with things you'd never want closed by surprise:
 
@@ -221,9 +232,9 @@ then choose **Reload config** from the tray menu.
 | `PromptTimeoutSeconds` | `60` | An unanswered bubble counts as **Not now** after this |
 | `AllowList` | `[]` | If not empty, **only** these apps are ever suggested |
 | `AutoCloseApps` | `[]` | Idle apps closed gently **without asking**. Empty means always ask. |
-| `DenyList` | *see above* | Never suggested, closed or trimmed |
+| `DenyList` | *see above* | Never suggested, auto-closed or auto-trimmed. In the memory list: Trim works, Close needs a second click. |
 | `Clickable` | `true` | Click him for the memory list. `false` makes him fully click-through. |
-| `MemoryListSize` | `4` | How many apps the memory list shows |
+| `MemoryListSize` | `6` | How many programs the memory list shows |
 | `WalkSpeed` | `40` | Pixels per second |
 | `Scale` | `3` | Size of each art pixel; it's rounded so pixels stay crisp at any display scaling |
 | `SweepBreaks` | `true` | Stop every few seconds for a proper sweep |

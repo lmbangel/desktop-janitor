@@ -72,6 +72,62 @@ internal static class Native
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX buffer);
 
+    [DllImport("ntdll.dll")]
+    private static extern int NtQuerySystemInformation(int infoClass, IntPtr buffer, int length, out int returnLength);
+
+    public readonly record struct ProcessSample(uint Pid, int SessionId, long PrivateWorkingSet, string ImageName);
+
+    /// <summary>
+    /// Every process with its private working set, in one call: the same figure as Task Manager's
+    /// "Memory" column. (WorkingSet64 counts shared pages again in every process, which overstates
+    /// multi-process apps such as browsers.) Empty if unavailable; callers fall back.
+    /// </summary>
+    public static List<ProcessSample> SnapshotProcesses()
+    {
+        const int SystemProcessInformation = 5;
+        const int StatusInfoLengthMismatch = unchecked((int)0xC0000004);
+        if (IntPtr.Size != 8) return new(); // the field offsets below are for 64-bit Windows
+
+        int size = 1 << 20;
+        while (true)
+        {
+            IntPtr buffer = Marshal.AllocHGlobal(size);
+            try
+            {
+                int status = NtQuerySystemInformation(SystemProcessInformation, buffer, size, out int needed);
+                if (status == StatusInfoLengthMismatch)
+                {
+                    size = Math.Max(size * 2, needed + 64 * 1024);
+                    continue;
+                }
+                if (status != 0) return new();
+
+                // SYSTEM_PROCESS_INFORMATION (x64): WorkingSetPrivateSize @0x08, ImageName @0x38
+                // (UNICODE_STRING: Length, then Buffer @0x40), UniqueProcessId @0x50, SessionId @0x64.
+                var samples = new List<ProcessSample>();
+                for (int offset = 0; ;)
+                {
+                    IntPtr entry = buffer + offset;
+                    int nameBytes = (ushort)Marshal.ReadInt16(entry, 0x38);
+                    IntPtr namePtr = Marshal.ReadIntPtr(entry, 0x40);
+                    samples.Add(new ProcessSample(
+                        Pid: (uint)Marshal.ReadIntPtr(entry, 0x50).ToInt64(),
+                        SessionId: Marshal.ReadInt32(entry, 0x64),
+                        PrivateWorkingSet: Marshal.ReadInt64(entry, 0x08),
+                        ImageName: namePtr == IntPtr.Zero ? string.Empty : Marshal.PtrToStringUni(namePtr, nameBytes / 2)));
+
+                    int next = Marshal.ReadInt32(entry, 0);
+                    if (next == 0) return samples;
+                    offset += next;
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+    }
+
     [DllImport("user32.dll")]
     public static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
 

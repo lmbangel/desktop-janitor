@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 
@@ -5,19 +6,29 @@ namespace DesktopJanitor;
 
 public sealed record AppWindow(IntPtr Handle, uint ProcessId, string Title, bool Minimized);
 
-/// <summary>One app as you'd see it in Alt+Tab: its windows plus all its same-named processes.</summary>
+/// <summary>
+/// One program as Task Manager groups it: every process started from the same exe, with
+/// their combined private working set, plus any visible windows they own.
+/// </summary>
 public sealed class AppInfo
 {
-    public AppInfo(string name, string displayName)
+    public AppInfo(string key, string name, string displayName)
     {
+        Key = key;
         Name = name;
         DisplayName = displayName;
     }
+
+    /// <summary>Groups processes: the exe's full path (or "name:x" when it can't be read).</summary>
+    public string Key { get; }
 
     /// <summary>Normalised process name, e.g. "spotify". This is what config lists match.</summary>
     public string Name { get; }
     public string DisplayName { get; }
     public List<AppWindow> Windows { get; } = new();
+    public List<uint> ProcessIds { get; } = new();
+
+    /// <summary>Private working set of all its processes: the figure in Task Manager's Memory column.</summary>
     public long MemoryBytes { get; set; }
     public int ProcessCount { get; set; }
     public string? ExePath { get; set; }
@@ -25,10 +36,11 @@ public sealed class AppInfo
     /// <summary>Why the janitor must never touch this app; null means it may be suggested.</summary>
     public string? ProtectedReason { get; set; }
 
+    public bool HasWindows => Windows.Count > 0;
     public bool AllMinimized => Windows.All(w => w.Minimized);
 }
 
-/// <summary>Finds apps with real, visible windows and marks the ones that are off limits.</summary>
+/// <summary>Groups every process in your session by program, and marks the ones that are off limits.</summary>
 public static class AppScanner
 {
     // Hard safety list: never configurable. Most also live under C:\Windows, which is protected too.
@@ -60,62 +72,110 @@ public static class AppScanner
     private static readonly string WindowsDir =
         Environment.GetFolderPath(Environment.SpecialFolder.Windows).TrimEnd('\\') + "\\";
 
+    // File descriptions don't change while an exe exists, and reading them for every process each scan adds up.
+    private static readonly ConcurrentDictionary<string, string?> Descriptions = new(StringComparer.OrdinalIgnoreCase);
+
     public static List<AppInfo> Scan()
     {
         using Process me = Process.GetCurrentProcess();
         int session = me.SessionId;
         uint myPid = (uint)me.Id;
 
-        var windows = new List<AppWindow>();
+        var windowsByPid = new Dictionary<uint, List<AppWindow>>();
         Native.EnumWindows((hwnd, _) =>
         {
             if (IsAppWindow(hwnd))
             {
                 Native.GetWindowThreadProcessId(hwnd, out uint pid);
-                windows.Add(new AppWindow(hwnd, pid, Native.GetWindowTitle(hwnd), Native.IsIconic(hwnd)));
+                if (!windowsByPid.TryGetValue(pid, out List<AppWindow>? list))
+                    windowsByPid[pid] = list = new List<AppWindow>();
+                list.Add(new AppWindow(hwnd, pid, Native.GetWindowTitle(hwnd), Native.IsIconic(hwnd)));
             }
             return true;
         }, IntPtr.Zero);
 
-        var apps = new Dictionary<string, AppInfo>();
-        foreach (IGrouping<uint, AppWindow> group in windows.GroupBy(w => w.ProcessId))
+        var apps = new Dictionary<string, AppInfo>(StringComparer.OrdinalIgnoreCase);
+        var access = new Dictionary<AppInfo, AccessSummary>();
+        foreach (Native.ProcessSample sample in Snapshot())
         {
-            ProcessFacts? facts = Inspect(group.Key, session, myPid);
-            if (facts is null) continue; // exited meanwhile
+            if (sample.SessionId != session || sample.Pid == 0) continue;
+            ProcessFacts facts = Inspect(sample, myPid);
+            string key = facts.Path ?? "name:" + facts.Name;
 
-            if (!apps.TryGetValue(facts.Name, out AppInfo? app))
+            if (!apps.TryGetValue(key, out AppInfo? app))
             {
-                app = new AppInfo(facts.Name, facts.DisplayName);
-                apps.Add(facts.Name, app);
+                app = new AppInfo(key, facts.Name, facts.DisplayName) { ExePath = facts.Path };
+                apps.Add(key, app);
+                access[app] = new AccessSummary();
             }
-            app.Windows.AddRange(group);
-            app.ExePath ??= facts.Path;
-            // If any process behind the app is off limits, the whole app is.
-            app.ProtectedReason ??= facts.ProtectedReason;
+            app.ProcessIds.Add(sample.Pid);
+            app.ProcessCount++;
+            app.MemoryBytes += sample.PrivateWorkingSet;
+            // Rules about the program itself (Windows, security software, me) cover the whole group.
+            app.ProtectedReason ??= facts.RuleReason;
+
+            AccessSummary summary = access[app];
+            bool windowed = windowsByPid.TryGetValue(sample.Pid, out List<AppWindow>? windows);
+            if (windowed) app.Windows.AddRange(windows!);
+            summary.Note(facts, windowed);
         }
 
-        // Memory counts every same-named process in this session (browsers, Electron apps, etc. are many).
+        foreach ((AppInfo app, AccessSummary summary) in access)
+            app.ProtectedReason ??= summary.Reason(app.HasWindows);
+
+        return apps.Values.OrderByDescending(a => a.MemoryBytes).ToList();
+    }
+
+    /// <summary>The group key for a process, matching <see cref="AppInfo.Key"/> (used for the foreground app).</summary>
+    public static string? KeyFor(uint pid)
+    {
+        IntPtr handle = Native.OpenProcess(Native.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        if (handle != IntPtr.Zero)
+        {
+            try
+            {
+                if (Native.GetProcessPath(handle) is { } path) return path;
+            }
+            finally
+            {
+                Native.CloseHandle(handle);
+            }
+        }
+        try
+        {
+            using Process p = Process.GetProcessById((int)pid);
+            return "name:" + AppNames.Normalize(p.ProcessName);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Private working set per process ID, for checking what's left after a close.</summary>
+    public static Dictionary<uint, long> MemoryByPid() =>
+        Snapshot().GroupBy(s => s.Pid).ToDictionary(g => g.Key, g => g.First().PrivateWorkingSet);
+
+    private static List<Native.ProcessSample> Snapshot()
+    {
+        List<Native.ProcessSample> samples = Native.SnapshotProcesses();
+        if (samples.Count > 0) return samples;
+
+        // Fallback (32-bit or the call failed): working sets, which overstate shared memory a little.
         foreach (Process p in Process.GetProcesses())
         {
             using (p)
             {
                 try
                 {
-                    if (p.SessionId != session) continue;
-                    if (apps.TryGetValue(AppNames.Normalize(p.ProcessName), out AppInfo? app))
-                    {
-                        app.MemoryBytes += p.WorkingSet64;
-                        app.ProcessCount++;
-                    }
+                    samples.Add(new Native.ProcessSample((uint)p.Id, p.SessionId, p.WorkingSet64, p.ProcessName + ".exe"));
                 }
                 catch (InvalidOperationException)
                 {
-                    // Exited while we looked.
                 }
             }
         }
-
-        return apps.Values.OrderByDescending(a => a.MemoryBytes).ToList();
+        return samples;
     }
 
     /// <summary>Roughly the Alt+Tab rule: visible, unowned, titled, not a tool window, not cloaked.</summary>
@@ -126,58 +186,69 @@ public static class AppScanner
         && Native.GetWindowTextLength(hwnd) > 0
         && !Native.IsCloaked(hwnd);
 
-    private sealed record ProcessFacts(string Name, string DisplayName, string? Path, string? ProtectedReason);
+    /// <param name="RuleReason">Protected because of what the program is.</param>
+    /// <param name="AccessReason">This process couldn't be inspected or runs elevated.</param>
+    private sealed record ProcessFacts(string Name, string DisplayName, string? Path, string? RuleReason, string? AccessReason);
 
-    private static ProcessFacts? Inspect(uint pid, int session, uint myPid)
+    private static ProcessFacts Inspect(Native.ProcessSample sample, uint myPid)
     {
-        string name, display;
-        int processSession;
-        try
-        {
-            using Process p = Process.GetProcessById((int)pid);
-            name = AppNames.Normalize(p.ProcessName);
-            display = p.ProcessName;
-            processSession = p.SessionId;
-        }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
-        {
-            return null;
-        }
+        string name = AppNames.Normalize(sample.ImageName);
+        string display = Path.GetFileNameWithoutExtension(sample.ImageName);
 
-        string? reason = null;
-        if (pid == myPid) reason = "that's me";
-        else if (processSession != session) reason = "belongs to another Windows session";
-        else if (SystemProcesses.Contains(name)) reason = "Windows system process";
-        else if (SecurityProcesses.Contains(name)) reason = "security software";
+        string? rule = null;
+        if (sample.Pid == myPid) rule = "that's me";
+        else if (SystemProcesses.Contains(name)) rule = "Windows system process";
+        else if (SecurityProcesses.Contains(name)) rule = "security software";
 
-        IntPtr handle = Native.OpenProcess(Native.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+        IntPtr handle = Native.OpenProcess(Native.PROCESS_QUERY_LIMITED_INFORMATION, false, sample.Pid);
         if (handle == IntPtr.Zero)
-            return new ProcessFacts(name, display, null, reason ?? "can't be inspected (access denied)");
+            return new ProcessFacts(name, display, null, rule, "can't be inspected (access denied)");
 
-        string? path;
+        string? path, accessReason = null;
         try
         {
             path = Native.GetProcessPath(handle);
             if (path is null)
             {
-                reason ??= "can't be inspected (no path)";
+                accessReason = "can't be inspected (no path)";
             }
             else
             {
-                display = Describe(path) ?? display;
-                if (path.StartsWith(WindowsDir, StringComparison.OrdinalIgnoreCase)) reason ??= "part of Windows";
-                if (SecurityVendorFolders.Any(f => path.Contains(f, StringComparison.OrdinalIgnoreCase))) reason ??= "security software";
+                display = Descriptions.GetOrAdd(path, Describe) ?? display;
+                if (path.StartsWith(WindowsDir, StringComparison.OrdinalIgnoreCase)) rule ??= "part of Windows";
+                if (SecurityVendorFolders.Any(f => path.Contains(f, StringComparison.OrdinalIgnoreCase))) rule ??= "security software";
             }
 
             bool? elevated = Native.IsElevated(handle);
-            if (elevated is null) reason ??= "can't be inspected (token access denied)";
-            else if (elevated.Value) reason ??= "runs as administrator";
+            if (elevated is null) accessReason ??= "can't be inspected (token access denied)";
+            else if (elevated.Value) accessReason ??= "runs as administrator";
         }
         finally
         {
             Native.CloseHandle(handle);
         }
-        return new ProcessFacts(name, display, path, reason);
+        return new ProcessFacts(name, display, path, rule, accessReason);
+    }
+
+    /// <summary>
+    /// Access problems only count where they matter: on processes that own windows (those are what
+    /// Close talks to). Browsers' sandboxed helpers refuse inspection, and that mustn't protect the browser.
+    /// </summary>
+    private sealed class AccessSummary
+    {
+        private string? _windowedReason;
+        private bool _anyInspectable;
+        private string? _firstReason;
+
+        public void Note(ProcessFacts facts, bool windowed)
+        {
+            if (facts.AccessReason is null) _anyInspectable = true;
+            else _firstReason ??= facts.AccessReason;
+            if (windowed) _windowedReason ??= facts.AccessReason;
+        }
+
+        public string? Reason(bool hasWindows) =>
+            hasWindows ? _windowedReason : _anyInspectable ? null : _firstReason;
     }
 
     private static string? Describe(string path)

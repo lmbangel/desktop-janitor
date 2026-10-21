@@ -30,16 +30,22 @@ public static class Snapshots
         Save(new SpeechBubble("Closed Spotify", "That's about 312 MB swept up.", Array.Empty<BubbleButton>(), TimeSpan.FromSeconds(5)),
             Path.Combine(dir, "bubble-remark.png"));
 
-        string office = @"C:\Program Files\Microsoft Office\root\Office16";
+        // One row of each kind: closable, deny-listed (Close asks twice), background (Trim only), protected.
         Save(MemoryPanel.CreateSample(
-                new (string, string?, long, string)[]
+                new (string, string?, long, string, bool, bool)[]
                 {
-                    ("Google Chrome", @"C:\Program Files\Google\Chrome\Application\chrome.exe", 3482 * MB, "6 windows, unused 42 min"),
-                    ("Microsoft Edge", @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", 1638 * MB, "3 windows, unused 35 min"),
-                    ("Firefox", @"C:\Program Files\Mozilla Firefox\firefox.exe", 1126 * MB, "1 window, unused 18 min"),
-                    ("Microsoft PowerPoint", Path.Combine(office, "POWERPNT.EXE"), 412 * MB, "1 window, unused 51 min"),
+                    ("Google Chrome", @"C:\Program Files\Google\Chrome\Application\chrome.exe", 2412 * MB,
+                        "7 windows, unused 42 min", true, true),
+                    ("Visual Studio Code", Environment.ExpandEnvironmentVariables(@"%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe"),
+                        1126 * MB, "2 windows, used just now, deny-listed", true, true),
+                    ("Microsoft Edge", @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", 642 * MB,
+                        "Background, 9 processes", true, false),
+                    ("Windows Explorer", @"C:\Windows\explorer.exe", 410 * MB, "Protected: Windows system process", false, false),
+                    ("Firefox", @"C:\Program Files\Mozilla Firefox\firefox.exe", 388 * MB, "1 window, unused 18 min", true, true),
+                    ("Microsoft Word", @"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE", 296 * MB,
+                        "1 window, unused 51 min", true, true),
                 },
-                "Not listed: Visual Studio Code (1.3 GB) and 9 more, protected or on your deny list.",
+                "Top 6 of 63 programs by memory, measured like Task Manager's Memory column.",
                 ramUsed: 12_900 * MB,
                 ramTotal: 16_100 * MB),
             Path.Combine(dir, "memory-panel.png"));

@@ -17,22 +17,30 @@ public static class CleanupPolicy
         if (app.ProtectedReason is { } reason) return $"protected: {reason}";
         if (AppNames.Contains(config.DenyList, app.Name)) return "skipped: on your deny list";
         if (config.AllowList.Count > 0 && !AppNames.Contains(config.AllowList, app.Name)) return "skipped: not on your allow list";
+        if (!app.HasWindows) return "background process: no window to close";
         if (app.MemoryBytes < config.MinMemoryMB * Bytes.MB) return $"skipped: under {config.MinMemoryMB} MB";
         if (config.OnlyMinimized && !app.AllMinimized) return "waiting: has a window that isn't minimised";
-        if (app.Name == foregroundApp) return "in use right now";
+        if (IsForeground(app, foregroundApp)) return "in use right now";
         if (usage is null || usage.IdleSeconds < config.IdleMinutes * 60) return $"fine: suggested only after {config.IdleMinutes:0} min unused";
         if (usage.SnoozedUntil > DateTime.UtcNow) return "snoozed";
         return null;
     }
 
-    /// <summary>For your own clicks in the memory list: hard protections and the deny list still apply.</summary>
-    public static bool MayActOnManually(AppInfo app, JanitorConfig config) =>
-        app.ProtectedReason is null && !AppNames.Contains(config.DenyList, app.Name);
+    /// <summary>
+    /// Your own clicks in the memory list: only the hard protections apply. The deny list keeps the
+    /// janitor from suggesting or auto-closing an app; it doesn't stop you (the list asks you to confirm).
+    /// </summary>
+    public static bool MayActOnManually(AppInfo app) => app.ProtectedReason is null;
+
+    public static bool IsDenied(AppInfo app, JanitorConfig config) => AppNames.Contains(config.DenyList, app.Name);
 
     /// <summary>For trimming only: protections and your lists apply, idle time and size don't.</summary>
     public static bool MayTrim(AppInfo app, string? foregroundApp, JanitorConfig config) =>
         app.ProtectedReason is null
         && !AppNames.Contains(config.DenyList, app.Name)
         && (config.AllowList.Count == 0 || AppNames.Contains(config.AllowList, app.Name))
-        && app.Name != foregroundApp;
+        && !IsForeground(app, foregroundApp);
+
+    private static bool IsForeground(AppInfo app, string? foregroundApp) =>
+        string.Equals(app.Key, foregroundApp, StringComparison.OrdinalIgnoreCase);
 }
